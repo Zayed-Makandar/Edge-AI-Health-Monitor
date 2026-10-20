@@ -36,7 +36,13 @@ This project combines a low-cost sensor kit with an AI pipeline that runs entire
 - **Demo mode without hardware:** a built-in simulator streams three synthetic patients (normal, high-risk and arrhythmia), and readings can also arrive over HTTP or a USB-serial bridge.
 - **Patient isolation:** each screening is its own session, so one patient's data never leaks into the next.
 
-## Screenshots
+## Hardware and Screenshots
+
+![The screening kiosk](assets/screenshots/03-kiosk.jpg)
+*The kiosk: a mini PC, webcam and display, with temperature, blood pressure, SpO2 and ECG sensors mounted on the panel*
+
+![Live screening](assets/screenshots/04-live-screening.jpg)
+*The dashboard on the kiosk during a live screening, with webcam vision analysis running (face blurred)*
 
 | | |
 |---|---|
