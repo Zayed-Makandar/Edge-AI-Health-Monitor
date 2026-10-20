@@ -9,10 +9,14 @@ An offline health-screening kiosk: an IoT sensor kit streams vital signs to cust
 ![MQTT](https://img.shields.io/badge/MQTT-660066?logo=mqtt&logoColor=white)
 ![ESP8266](https://img.shields.io/badge/ESP8266-C%2B%2B-E7352C?logo=espressif&logoColor=white)
 ![MediaPipe](https://img.shields.io/badge/MediaPipe-0097A7)
+![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?logo=opencv&logoColor=white)
 
 > **Note:** The source code is private. This repository documents the architecture, model design and results. I'm happy to walk through the implementation in an interview.
 
-![Dashboard](screenshots/01-dashboard.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/models-dark.png">
+  <img alt="Bar charts: the ten INT8 models total 601 KB on disk and run in 0.71 ms per screening on a laptop CPU; the largest is the vitals forecast LSTM at 217 KB and 216 microseconds" src="assets/models-light.png">
+</picture>
 
 ---
 
@@ -29,50 +33,45 @@ This project combines a low-cost sensor kit with an AI pipeline that runs entire
 - **Contactless vision analysis (optional):** a 12-second webcam scan estimates heart rate with remote photoplethysmography (rPPG) and measures stress, blink rate and pallor indicators.
 - **Automated PDF report** with vitals, trend charts, the ECG trace and a plain-language summary written by a local LLM. The LLM can only phrase facts the models already computed, and a rule-based fallback takes over if it's unavailable.
 - **Remote device management:** live device status, event log, and Wi-Fi reconfiguration over MQTT without re-flashing the firmware.
+- **Demo mode without hardware:** a built-in simulator streams three synthetic patients (normal, high-risk and arrhythmia), and readings can also arrive over HTTP or a USB-serial bridge.
 - **Patient isolation:** each screening is its own session, so one patient's data never leaks into the next.
 
 ## Screenshots
 
 | | |
 |---|---|
-| ![Risk analysis](screenshots/02-risk-analysis.png) | ![ECG waveform](screenshots/03-ecg.png) |
-| *AI risk assessment after a screening* | *Live ECG waveform streamed from the device* |
-| ![PDF report](screenshots/04-report.png) | ![Sensor kit](screenshots/05-hardware.png) |
-| *Generated one-page report (demo patient)* | *The ESP8266 sensor kit* |
+| ![Screening dashboard](assets/screenshots/01-dashboard.png) | ![Generated report](assets/screenshots/02-report.png) |
+| *Screening dashboard with a synthetic demo patient* | *The generated one-page report* |
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-    subgraph Device["ESP8266 sensor kit"]
-        T["IR temperature"]
-        S["SpO2 / heart rate"]
-        B["Blood pressure cuff"]
-        E["ECG lead"]
-    end
-    Device -->|MQTT| Bridge["MQTT bridge"]
-    Bridge --> Queue["Reading queue"]
-    Queue --> A["Pathway A: demographics MLP"]
-    Queue --> V["Pathway B: vitals normaliser"]
-    Queue --> C["Pathway C: ECG 1D-CNN + wavelet 2D-CNN + LSTM"]
-    A --> F["Fusion layer (128-d latent)"]
+flowchart TB
+    Kit["ESP8266 sensor kit<br/>temperature · SpO2 · heart rate<br/>BP cuff · ECG lead"] -->|"MQTT"| Ingest["Ingestion<br/>MQTT bridge · HTTP API · USB-serial bridge"]
+    Sim["Demo simulator<br/>synthetic patients"] -->|"HTTP"| Ingest
+    Ingest --> Queue["Reading queue"]
+    Queue --> A["Pathway A<br/>demographics MLP"]
+    Queue --> V["Pathway B<br/>vitals normaliser"]
+    Queue --> C["Pathway C<br/>ECG 1D-CNN<br/>wavelet 2D-CNN · LSTM"]
+    A --> F["Fusion layer<br/>128-d latent"]
     V --> F
     C --> F
     F --> R1["General risk"]
-    F --> R2["Cardiovascular (MACE)"]
-    F --> R3["Hypertension stage"]
-    F --> R4["Arrhythmia (self-attention)"]
-    F --> R5["Vitals forecast (LSTM)"]
-    R1 & R2 & R3 & R4 & R5 --> DB[("SQLite")]
-    DB -->|WebSocket| UI["Live dashboard"]
-    DB --> PDF["PDF report"]
-    LLM["Local LLM (Ollama)"] -.->|"narrative only"| PDF
-    Cam["Webcam"] --> Vision["Vision analyser (MediaPipe, rPPG)"] --> UI
+    F --> R2["Cardiovascular<br/>(MACE)"]
+    F --> R3["Hypertension<br/>stage"]
+    F --> R4["Arrhythmia<br/>(self-attention)"]
+    F --> R5["Vitals forecast<br/>(LSTM)"]
+    R1 & R2 & R3 & R4 & R5 --> Rules["Rule-based recommendations"]
+    Rules --> DB[("SQLite")]
+    LLM["Local LLM (Ollama)"] -.->|"narrative only"| PDF["PDF report"]
+    DB --> PDF
+    DB -->|"WebSocket"| UI["Live dashboard"]
+    Cam["Webcam"] --> Vision["Vision analyser<br/>MediaPipe · InsightFace · rPPG"] --> UI
 ```
 
 ## How It Works
 
-1. The ESP8266 firmware reads four sensors and publishes the readings over MQTT.
+1. The ESP8266 firmware reads four sensors and publishes the readings over MQTT. The same pipeline also accepts readings over HTTP and from a USB-serial bridge.
 2. A bridge service queues the readings and passes them to the AI engine.
 3. Three encoders process different signal types: an MLP for demographics, a statistical normaliser for vitals, and a CNN + wavelet-scalogram CNN + LSTM stack for the ECG.
 4. A fusion layer combines the three into a single 128-dimensional representation.
@@ -86,7 +85,7 @@ flowchart LR
     Train["Train in PyTorch"] --> Export["Export to ONNX"]
     Export --> Quant["Static INT8 quantisation"]
     Quant --> Check["Compare FP32 vs INT8 outputs"]
-    Check -->|"within tolerance"| Deploy["Ship to kiosk (ONNX Runtime, CPU)"]
+    Check -->|"within tolerance"| Deploy["Ship to kiosk<br/>(ONNX Runtime, CPU)"]
     Check -->|"too much drift"| Train
 ```
 
@@ -96,10 +95,12 @@ All 10 models go through the same pipeline. Each quantised model is checked nume
 
 | Metric | Value |
 |---|---|
-| Models in the pipeline | 10 (all INT8-quantised ONNX) |
-| Total model size | [X] KB (FP32: [X] KB) |
-| Inference latency per screening, CPU only | [X] ms (FP32: [X] ms) |
-| Hardware | Commodity 4-core CPU, no GPU |
+| Models in the pipeline | 10, all INT8-quantised ONNX |
+| Total size of all 10 models | 601 KB |
+| Model inference per screening | 0.71 ms median, 1.30 ms p95 (300 runs) |
+| Hardware | Laptop CPU (Intel Core i5-12450H), 2 threads, no GPU |
+
+Inference time covers all ten models for one screening at batch size 1. Wavelet preprocessing and I/O are not included.
 
 > The models are currently trained on synthetic physiological data. The architecture and deployment pipeline are complete; clinical accuracy has not been validated on real patient data, and this is not a medical device.
 
@@ -109,10 +110,10 @@ All 10 models go through the same pipeline. Each quantised model is checked nume
 |---|---|
 | Deep learning | PyTorch (MLP, 1D-CNN, 2D-CNN on wavelet scalograms, LSTM, self-attention, fusion layer) |
 | Edge inference | ONNX Runtime, static INT8 quantisation |
-| Computer vision | MediaPipe FaceMesh, InsightFace, rPPG (forehead green-channel FFT) |
+| Computer vision | MediaPipe FaceMesh, InsightFace, OpenCV, rPPG (forehead green-channel FFT) |
 | LLM | Ollama (Gemma 3 1B), constrained to narrating computed results |
 | Backend | FastAPI, WebSockets, SQLite (WAL mode) |
-| IoT | ESP8266 firmware (C++), MQTT, MLX90614, MAX30102, BP cuff, ECG front end |
+| IoT | ESP8266 firmware (C++), MQTT, HTTP and USB-serial ingestion, MLX90614, MAX30102, BP cuff, ECG front end |
 | Frontend | HTML, CSS, JavaScript, Chart.js |
 | Reports | ReportLab |
 
@@ -120,6 +121,7 @@ All 10 models go through the same pipeline. Each quantised model is checked nume
 
 - **Separate encoders per signal type instead of one large model:** an ECG waveform, a blood-pressure number and a patient's age need different architectures. Separate pathways make each part easier to debug and explain.
 - **LLM for wording only:** in a health context, a hallucinated finding is dangerous. The local LLM receives only results that were already computed and is instructed to rephrase them, and a deterministic template takes over if it fails.
+- **Small thread budget:** each ONNX Runtime session uses two threads, so the whole pipeline stays light on a kiosk CPU that also runs the dashboard and vision analysis.
 - **Fully offline:** no internet dependency means the kiosk keeps working on site, and no patient data leaves the device.
 
 ## My Role
@@ -128,4 +130,4 @@ I designed and built the system end to end: the PyTorch model architectures, the
 
 ## Contact
 
-**Zayed Makandar** | [zayedmakandar03@gmail.com](mailto:zayedmakandar03@gmail.com) | [LinkedIn](https://www.linkedin.com/in/zayed-makandar-642536422/)
+**Zayed Makandar** | [zayedmakandar03@gmail.com](mailto:zayedmakandar03@gmail.com) | [LinkedIn](https://www.linkedin.com/in/zayed-makandar-642536422/) | [Portfolio](https://zayedmakandar.com)
